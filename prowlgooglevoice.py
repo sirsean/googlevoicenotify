@@ -1,3 +1,5 @@
+# vim:noexpandtab
+
 from googlevoicenotify import GoogleVoiceNotify
 from time import sleep
 from os import environ, path
@@ -40,7 +42,7 @@ def readparams(cfile):
 		params['sleep']
 	except:
 		params['sleep'] = 60
-	return params['sleep'], params['gvid'], params['password']
+	return int(params['sleep']), params['gvid'], params['password']
 
 if __name__ == '__main__':
 	try:

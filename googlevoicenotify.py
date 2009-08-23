@@ -1,7 +1,9 @@
+# vim:noexpandtab
 """
 
 Google Voice Notify, v0.1
 by Mike Krieger <mikekrieger@gmail.com>
+edited by Sean Schulte <sirsean@gmail.com>
 
 """
 
@@ -12,14 +14,14 @@ import urllib2
 import cPickle as pickle
 
 class GoogleVoiceNotify(object):
-	def __init__(self, username, password, listeners=None, picklefile='/tmp/pickled-updates'):
+	def __init__(self, username, password, listeners=None, picklefile='/tmp/gv_read_messages_picklefile'):
 		"""
 		Initialize the Google Voice Notifier 
 		"""
 		# GV username and pass
 		self.username = username
 		self.password = password
-		self.picklefile = picklefile	
+		self.picklefile = picklefile
 		self.headers = [("Content-type", "application/x-www-form-urlencoded"),
 														('User-Agent', 'Mozilla/4.0 (compatible; MSIE 5.5; Windows NT)'),
 														("Accept", "application/xml")]
@@ -29,11 +31,11 @@ class GoogleVoiceNotify(object):
 		# avoid double notifications
 		try:
 			cached_fl = open(picklefile, 'r')
-			self.convo_threads = pickle.load(cached_fl)
+			self.read_sms_messages = pickle.load(cached_fl)
 			cached_fl.close()
 		except Exception, e:
 			from collections import defaultdict
-			self.convo_threads = defaultdict(set)
+			self.read_sms_messages = defaultdict(set)
 		"""
 			Register a list of listeners that print out notifications.
 			Listeners must implement an 'on_notification' method,
@@ -67,33 +69,23 @@ class GoogleVoiceNotify(object):
 		return str(sp.response.html.contents[0])
 
 	def parse_result(self, result):
-		# the Voice HTML seems to have an extra closing div?
-		# this replacement fixes it for BeautifulSoup's parser
-		cleaned = result.replace('</div></div></div></div></div>', '</div></div></div></div>')
-		sp = BeautifulSoup(cleaned)
-		
-		# parse SMS threads
-		sms = sp.findAll('div', attrs={'class':'goog-flat-button gc-message gc-message-sms'})
-		for thread in sms:
-			id = thread['id']
-			# find all message rows
-			rows = thread.findAll('div', attrs={'class':'gc-message-sms-row'})
-			# if there looks like there's a new message here
-			if not self.convo_threads[id] or len(rows) != len(self.convo_threads[id]):
-				start_index = 0 
-				for message in rows:
-					from_name = message.findAll('span', attrs={'class':'gc-message-sms-from'})[0].string.strip()[:-1]
-					message_txt = message.findAll('span', attrs={'class':'gc-message-sms-text'})[0].string.strip()
-					identifier = from_name + ' ' + message_txt
-					if identifier not in self.convo_threads[id]:
-						# new message!
-						self.convo_threads[id].add(identifier)
-						if from_name != 'Me':
-							if self.listeners and len(self.listeners) > 0:
-								for listener in self.listeners:
-									listener.on_notification('SMS', from_name, message_txt)
-						# debug: print message_txt
-		
+		sp = BeautifulSoup(result)
+
+		messages = sp.findAll('div', attrs={'class':'gc-message-sms-row'})
+		for message in messages:
+			from_name = message.findAll('span', attrs={'class':'gc-message-sms-from'})[0].string.strip()[:-1]
+			text = message.findAll('span', attrs={'class':'gc-message-sms-text'})[0].string.strip()
+			time = message.findAll('span', attrs={'class':'gc-message-sms-time'})[0].string.strip()
+
+			key = self.generate_sms_key(from_name, text, time)
+
+			if not key in self.read_sms_messages:
+				self.read_sms_messages[key] = True
+				if from_name != 'Me':
+					if self.listeners and len(self.listeners) > 0:
+						for listener in self.listeners:
+							listener.on_notification('SMS', from_name, text)
+
 	def get_voicemails(self):
 		# if we haven't acquired cookies yet
 		if len(self.cookies) == 0:
@@ -126,15 +118,20 @@ class GoogleVoiceNotify(object):
 						if self.listeners and len(self.listeners) > 0:
 							for listener in self.listeners:
 								listener.on_notification('Voicemail', from_name, voicemail_transcript)
+
+	def generate_sms_key(self, from_name, text, time):
+		return '%s__BREAKER__%s__BREAKER__%s' % (from_name, text, time)
 		
 	def check(self):
 		feed = self.get_inbox()
 		feed = feed.replace("<![CDATA[", "")
 		feed = feed.replace("]]>", "")
 		self.parse_result(feed)
-		vmfeed = self.get_voicemails()
-		vmfeed = vmfeed.replace("<![CDATA[", "")
-		vmfeed = vmfeed.replace("]]>", "")
-		self.parse_voicemails(vmfeed)
+		# I don't want to parse voicemails for now
+		# vmfeed = self.get_voicemails()
+		# vmfeed = vmfeed.replace("<![CDATA[", "")
+		# vmfeed = vmfeed.replace("]]>", "")
+		# self.parse_voicemails(vmfeed)
 		out_fl = open(self.picklefile, 'w')
-		pickle.dump(self.convo_threads, out_fl)
+		pickle.dump(self.read_sms_messages, out_fl)
+		out_fl.close()
